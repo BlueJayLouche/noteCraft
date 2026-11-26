@@ -1,9 +1,12 @@
 cmake_minimum_required(VERSION 3.28)
 
+# Read by project(), so set before it: macOS 11 and up, Apple Silicon and Intel in one binary.
+set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "")
+set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "")
+
 project(NoteCraft VERSION 0.1.0 LANGUAGES C CXX)
 if(APPLE)
     enable_language(OBJC OBJCXX) # clap-wrapper's macOS sources
-    set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "")
 endif()
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 set(CMAKE_CXX_STANDARD 17)
