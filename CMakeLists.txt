@@ -13,6 +13,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON) # every static library, the SDKs' too, ends up in a shared plug-in
 
 include(FetchContent)
 set(CLAP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
@@ -34,7 +35,6 @@ FetchContent_MakeAvailable(clap-wrapper)
 
 add_library(notecraft-impl STATIC src/plugin.cpp)
 target_link_libraries(notecraft-impl PUBLIC clap)
-set_target_properties(notecraft-impl PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 make_clapfirst_plugins(
     TARGET_NAME notecraft

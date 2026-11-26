@@ -82,7 +82,7 @@ struct Arpeggiator : ScheduledEffect<Arpeggiator, 4> {
         const int mode = std::clamp(choice(p, Mode), 0, 4);
         std::array<Note, 32> base{};
         std::copy(held.begin(), held.begin() + static_cast<std::ptrdiff_t>(heldCount), base.begin());
-        auto* last = base.begin() + static_cast<std::ptrdiff_t>(heldCount);
+        auto last = base.begin() + static_cast<std::ptrdiff_t>(heldCount);
         if (mode != 4) {
             std::stable_sort(base.begin(), last, [](const Note& a, const Note& b) { return a.key < b.key; });
         }
@@ -90,7 +90,7 @@ struct Arpeggiator : ScheduledEffect<Arpeggiator, 4> {
         std::array<Note, 256> order{};
         std::size_t count = 0;
         for (int o = 0; o < octaves; ++o) {
-            for (auto* n = base.begin(); n != last; ++n) {
+            for (auto n = base.begin(); n != last; ++n) {
                 if (n->key + 12 * o > 127) continue;
                 order[count] = *n;
                 order[count++].key = static_cast<std::int16_t>(n->key + 12 * o);
@@ -127,8 +127,8 @@ struct Arpeggiator : ScheduledEffect<Arpeggiator, 4> {
 
     void noteOff(std::int64_t, const Note& n, const Values<4>&)
     {
-        auto* last = held.begin() + static_cast<std::ptrdiff_t>(heldCount);
-        auto* end = std::remove_if(held.begin(), last, [&n](const Note& h) { return h.channel == n.channel && h.key == n.key; });
+        auto last = held.begin() + static_cast<std::ptrdiff_t>(heldCount);
+        auto end = std::remove_if(held.begin(), last, [&n](const Note& h) { return h.channel == n.channel && h.key == n.key; });
         heldCount = static_cast<std::size_t>(end - held.begin());
         if (heldCount == 0) nextStep = -1.0;
     }
