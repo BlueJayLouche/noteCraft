@@ -71,7 +71,7 @@ public:
     const clap_plugin_t* clap() const { return &plugin_; }
 
     static inline const clap_plugin_descriptor_t descriptor = {
-        CLAP_VERSION_INIT, E::id, E::name, "NoteCraft", "", "", "", "0.1.0", E::description, features,
+        CLAP_VERSION_INIT, E::id, E::name, "NoteCraft", "", "", "", "0.1.1", E::description, features,
     };
 
 private:
