@@ -1,0 +1,116 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # macOS: arm64, since the pinned clap-validator is an aarch64 build; the bundles are universal, macOS 11+
+        # (CMakeLists.txt). Ubuntu 22.04: the oldest runner, so the plug-ins load on glibc 2.35 and newer.
+        os: [macos-15, ubuntu-22.04, windows-latest]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Tag matches plugin version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          V="${GITHUB_REF_NAME#v}"
+          grep -q "\"$V\"" src/plugin.cpp
+          grep -q "project(NoteCraft VERSION $V " CMakeLists.txt
+
+      - name: Build
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --config Release --parallel
+
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      # ponytail: validators on macOS only — the plug-in code is shared; add the Linux/Windows builds of them if a
+      # platform bug slips through
+      - name: Validate CLAP
+        if: runner.os == 'macOS'
+        run: |
+          python3 tools/fetch_validator.py
+          for id in $(grep -ho 'com\.notecraft\.[a-z-]*' src/*.hpp | sort -u); do
+            skip=()
+            # Latch's one parameter has two values and the validator's fixed random draw is its default (README).
+            if [ "$id" = com.notecraft.latch ]; then skip=(-x '^param-set-(events|no-cookies)$'); fi
+            build/tools/clap-validator-0.4.1/clap-validator validate build/NoteCraft.clap -p "$id" --only-failed "${skip[@]}"
+          done
+
+      - name: Validate VST3
+        if: runner.os == 'macOS'
+        run: |
+          cmake -S build/cpm/vst3sdk -B build/vst3-validator -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=arm64 \
+                -DSMTG_ENABLE_VSTGUI_SUPPORT=OFF -DSMTG_ADD_VST3_PLUGINS_SAMPLES=OFF -DSMTG_RUN_VST_VALIDATOR=OFF
+          cmake --build build/vst3-validator --target validator --parallel
+          build/vst3-validator/bin/Release/validator build/NoteCraft.vst3
+
+      - name: Package
+        run: |
+          NAME="NoteCraft-${GITHUB_REF_NAME//\//-}"
+          mkdir -p "dist/$NAME"
+          for bundle in NoteCraft.clap NoteCraft.vst3; do
+            found=$(find build -name "$bundle" -not -path '*/cpm/*' -not -path '*/_deps/*' -prune | head -n 1)
+            test -n "$found"
+            cp -R "$found" "dist/$NAME/"
+          done
+          cd dist
+          case "$RUNNER_OS" in
+            macOS)
+              # ponytail: ad-hoc signature, not notarized — add Developer ID secrets to drop the xattr step
+              codesign --force --deep -s - "$NAME/NoteCraft.clap" "$NAME/NoteCraft.vst3"
+              ditto -c -k --keepParent "$NAME" "$NAME-macos-universal.zip" ;;
+            Linux)
+              tar -czf "$NAME-linux-x86_64.tar.gz" "$NAME" ;;
+            Windows)
+              7z a "$NAME-windows-x64.zip" "$NAME" ;;
+          esac
+          rm -rf "$NAME"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.os }}
+          path: dist/*
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* -R "$GITHUB_REPOSITORY" --title "NoteCraft ${GITHUB_REF_NAME#v}" --notes "Eleven note effects as CLAP and VST3 plug-ins, for macOS (universal, 11+), Windows (x64) and Linux (x86_64, glibc 2.35+). What each one does is in the README.
+
+          **macOS:** copy NoteCraft.clap into ~/Library/Audio/Plug-Ins/CLAP and NoteCraft.vst3 into ~/Library/Audio/Plug-Ins/VST3, then clear the download quarantine (the bundles are not notarized):
+
+              xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/CLAP/NoteCraft.clap ~/Library/Audio/Plug-Ins/VST3/NoteCraft.vst3
+
+          **Windows:** copy NoteCraft.clap into C:\Program Files\Common Files\CLAP and NoteCraft.vst3 into C:\Program Files\Common Files\VST3.
+
+          **Linux:** copy NoteCraft.clap into ~/.clap and NoteCraft.vst3 into ~/.vst3.
+
+          The VST3 shows up as an instrument with a note output, since VST3 has no MIDI effect category. There are no custom editors yet: the host shows its own parameter view.
+
+          Rescan plug-ins in your host."

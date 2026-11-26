@@ -46,6 +46,12 @@ make_clapfirst_plugins(
     COPY_AFTER_BUILD FALSE
     PLUGIN_FORMATS CLAP VST3
 )
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # The C++ runtime inside the plug-in, so it loads beside a host built with another one.
+    foreach(format clap vst3)
+        target_link_options(notecraft_${format} PRIVATE -static-libstdc++ -static-libgcc)
+    endforeach()
+endif()
 
 enable_testing()
 foreach(name effects timing transforms generators pairing)

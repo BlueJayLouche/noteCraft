@@ -84,6 +84,10 @@ cmake --build build/vst3-validator --target validator
 build/vst3-validator/bin/Release/validator build/NoteCraft.vst3
 ```
 
+CI (GitHub Actions) builds and tests on macOS, Windows and Linux, runs both validators on macOS, and publishes a
+release with all three platforms' plug-ins from a `v*` tag whose version matches `src/plugin.cpp` and
+`CMakeLists.txt`.
+
 clap-validator 0.4.1 reports two failures for Latch (`param-set-events`, `param-set-no-cookies`): its one
 parameter has two values, and the validator's fixed random draw is the default, so it sees no change. Every other
 test passes.
