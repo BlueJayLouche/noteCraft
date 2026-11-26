@@ -77,137 +77,156 @@ public:
 private:
     static Plugin& self(const clap_plugin_t* p) { return *static_cast<Plugin*>(p->plugin_data); }
 
+    // Named functions, not lambdas: the MSVC of Visual Studio 18 misreads (and then crashes on) lambdas that initialize a static
+    // member of a class template.
+    static std::uint32_t paramsCount(const clap_plugin_t*) { return static_cast<std::uint32_t>(N); }
+
+    static bool paramsInfo(const clap_plugin_t*, std::uint32_t index, clap_param_info_t* info)
+    {
+        if (index >= N) return false;
+        const Param& p = E::params[index];
+        *info = clap_param_info_t{};
+        info->id = index;
+        info->flags = CLAP_PARAM_IS_AUTOMATABLE | (stepped(p.unit) ? CLAP_PARAM_IS_STEPPED : 0) |
+                      (p.unit == Unit::Choice ? CLAP_PARAM_IS_ENUM : 0);
+        std::snprintf(info->name, sizeof info->name, "%s", p.name);
+        info->min_value = p.min;
+        info->max_value = p.max;
+        info->default_value = p.defaultValue;
+        return true;
+    }
+
+    static bool paramsValue(const clap_plugin_t* plugin, clap_id id, double* value)
+    {
+        if (id >= N) return false;
+        *value = get(self(plugin).values_, id);
+        return true;
+    }
+
+    static bool paramsValueToText(const clap_plugin_t*, clap_id id, double value, char* text, std::uint32_t capacity)
+    {
+        if (id >= N || capacity == 0 || !std::isfinite(value)) return false;
+        const Param& p = E::params[id];
+        const long step = std::lround(std::clamp(value, p.min, p.max));
+        switch (p.unit) {
+        case Unit::Percent: std::snprintf(text, capacity, "%.0f %%", value * 100.0); break;
+        case Unit::Ms: std::snprintf(text, capacity, "%.1f ms", value); break;
+        case Unit::Semitones: std::snprintf(text, capacity, p.min < 0.0 ? "%+ld st" : "%ld st", step); break;
+        case Unit::Number: std::snprintf(text, capacity, "%ld", step); break;
+        case Unit::Choice: std::snprintf(text, capacity, "%s", p.labels[step - std::lround(p.min)]); break;
+        case Unit::Key: keyName(static_cast<int>(step), text, capacity); break;
+        }
+        return true;
+    }
+
+    static bool paramsTextToValue(const clap_plugin_t*, clap_id id, const char* text, double* value)
+    {
+        if (id >= N || text == nullptr) return false;
+        const Param& p = E::params[id];
+        if (p.unit == Unit::Choice || p.unit == Unit::Key) { // a label or a key name
+            for (long i = std::lround(p.min); i <= std::lround(p.max); ++i) {
+                char key[8] = "";
+                if (p.unit == Unit::Key) keyName(static_cast<int>(i), key, sizeof key);
+                if (sameText(p.unit == Unit::Choice ? p.labels[i - std::lround(p.min)] : key, text)) {
+                    *value = static_cast<double>(i);
+                    return true;
+                }
+            }
+        }
+        char* end = nullptr;
+        const double v = std::strtod(text, &end);
+        if (end == text || !std::isfinite(v)) return false;
+        *value = std::clamp(p.unit == Unit::Percent ? v / 100.0 : v, p.min, p.max);
+        return true;
+    }
+
+    static void paramsFlush(const clap_plugin_t* plugin, const clap_input_events_t* in, const clap_output_events_t*)
+    {
+        const std::uint32_t count = in->size(in);
+        for (std::uint32_t i = 0; i < count; ++i) {
+            if (const clap_event_header_t* h = in->get(in, i)) {
+                applyParam(h, self(plugin).values_, E::params);
+            }
+        }
+    }
+
     static inline const clap_plugin_params_t paramsExt = {
-        [](const clap_plugin_t*) { return static_cast<std::uint32_t>(N); },
-        [](const clap_plugin_t*, std::uint32_t index, clap_param_info_t* info) {
-            if (index >= N) return false;
-            const Param& p = E::params[index];
-            *info = clap_param_info_t{};
-            info->id = index;
-            info->flags = CLAP_PARAM_IS_AUTOMATABLE | (stepped(p.unit) ? CLAP_PARAM_IS_STEPPED : 0) |
-                          (p.unit == Unit::Choice ? CLAP_PARAM_IS_ENUM : 0);
-            std::snprintf(info->name, sizeof info->name, "%s", p.name);
-            info->min_value = p.min;
-            info->max_value = p.max;
-            info->default_value = p.defaultValue;
-            return true;
-        },
-        [](const clap_plugin_t* plugin, clap_id id, double* value) {
-            if (id >= N) return false;
-            *value = get(self(plugin).values_, id);
-            return true;
-        },
-        [](const clap_plugin_t*, clap_id id, double value, char* text, std::uint32_t capacity) {
-            if (id >= N || capacity == 0 || !std::isfinite(value)) return false;
-            const Param& p = E::params[id];
-            const long step = std::lround(std::clamp(value, p.min, p.max));
-            switch (p.unit) {
-            case Unit::Percent: std::snprintf(text, capacity, "%.0f %%", value * 100.0); break;
-            case Unit::Ms: std::snprintf(text, capacity, "%.1f ms", value); break;
-            case Unit::Semitones: std::snprintf(text, capacity, p.min < 0.0 ? "%+ld st" : "%ld st", step); break;
-            case Unit::Number: std::snprintf(text, capacity, "%ld", step); break;
-            case Unit::Choice: std::snprintf(text, capacity, "%s", p.labels[step - std::lround(p.min)]); break;
-            case Unit::Key: keyName(static_cast<int>(step), text, capacity); break;
-            }
-            return true;
-        },
-        [](const clap_plugin_t*, clap_id id, const char* text, double* value) {
-            if (id >= N || text == nullptr) return false;
-            const Param& p = E::params[id];
-            if (p.unit == Unit::Choice || p.unit == Unit::Key) { // a label or a key name
-                for (long i = std::lround(p.min); i <= std::lround(p.max); ++i) {
-                    char key[8] = "";
-                    if (p.unit == Unit::Key) keyName(static_cast<int>(i), key, sizeof key);
-                    if (sameText(p.unit == Unit::Choice ? p.labels[i - std::lround(p.min)] : key, text)) {
-                        *value = static_cast<double>(i);
-                        return true;
-                    }
-                }
-            }
-            char* end = nullptr;
-            const double v = std::strtod(text, &end);
-            if (end == text || !std::isfinite(v)) return false;
-            *value = std::clamp(p.unit == Unit::Percent ? v / 100.0 : v, p.min, p.max);
-            return true;
-        },
-        [](const clap_plugin_t* plugin, const clap_input_events_t* in, const clap_output_events_t*) {
-            const std::uint32_t count = in->size(in);
-            for (std::uint32_t i = 0; i < count; ++i) {
-                if (const clap_event_header_t* h = in->get(in, i)) {
-                    applyParam(h, self(plugin).values_, E::params);
-                }
-            }
-        },
+        &paramsCount, &paramsInfo, &paramsValue, &paramsValueToText, &paramsTextToValue, &paramsFlush,
     };
 
     // State: a count, then (id, value) pairs, native byte order (every target is little-endian).
     // Unknown ids are skipped and values clamped, so an older or newer state still loads.
     static constexpr std::size_t kStateMax = 4 + 64 * 12;
 
-    static inline const clap_plugin_state_t stateExt = {
-        [](const clap_plugin_t* plugin, const clap_ostream_t* stream) {
-            unsigned char bytes[4 + N * 12];
-            const auto count = static_cast<std::uint32_t>(N);
-            std::memcpy(bytes, &count, 4);
-            for (std::uint32_t i = 0; i < N; ++i) {
-                const double v = get(self(plugin).values_, i);
-                std::memcpy(bytes + 4 + i * 12, &i, 4);
-                std::memcpy(bytes + 8 + i * 12, &v, 8);
-            }
-            std::size_t done = 0;
-            while (done < sizeof bytes) {
-                const std::int64_t n = stream->write(stream, bytes + done, sizeof bytes - done);
-                if (n <= 0) return false;
-                done += static_cast<std::size_t>(n);
-            }
-            return true;
-        },
-        [](const clap_plugin_t* plugin, const clap_istream_t* stream) {
-            unsigned char bytes[kStateMax];
-            std::size_t size = 0;
-            while (size < sizeof bytes) {
-                const std::int64_t n = stream->read(stream, bytes + size, sizeof bytes - size);
-                if (n < 0) return false;
-                if (n == 0) break;
-                size += static_cast<std::size_t>(n);
-            }
-            std::uint32_t count = 0;
-            if (size < 4) return false;
-            std::memcpy(&count, bytes, 4);
-            if (count > 64 || size < 4 + std::size_t{count} * 12) return false;
-            auto& values = self(plugin).values_;
-            for (std::uint32_t i = 0; i < count; ++i) {
-                std::uint32_t id = 0;
-                double v = 0.0;
-                std::memcpy(&id, bytes + 4 + i * 12, 4);
-                std::memcpy(&v, bytes + 8 + i * 12, 8);
-                if (id < N && std::isfinite(v)) {
-                    values[id].store(std::clamp(v, E::params[id].min, E::params[id].max), std::memory_order_relaxed);
-                }
-            }
-            const clap_host_t* host = self(plugin).host_;
-            const auto* hostParams = host != nullptr && host->get_extension != nullptr
-                ? static_cast<const clap_host_params_t*>(host->get_extension(host, CLAP_EXT_PARAMS))
-                : nullptr;
-            if (hostParams != nullptr && hostParams->rescan != nullptr) {
-                hostParams->rescan(host, CLAP_PARAM_RESCAN_VALUES);
-            }
-            return true;
-        },
-    };
+    static bool stateSave(const clap_plugin_t* plugin, const clap_ostream_t* stream)
+    {
+        unsigned char bytes[4 + N * 12];
+        const auto count = static_cast<std::uint32_t>(N);
+        std::memcpy(bytes, &count, 4);
+        for (std::uint32_t i = 0; i < N; ++i) {
+            const double v = get(self(plugin).values_, i);
+            std::memcpy(bytes + 4 + i * 12, &i, 4);
+            std::memcpy(bytes + 8 + i * 12, &v, 8);
+        }
+        std::size_t done = 0;
+        while (done < sizeof bytes) {
+            const std::int64_t n = stream->write(stream, bytes + done, sizeof bytes - done);
+            if (n <= 0) return false;
+            done += static_cast<std::size_t>(n);
+        }
+        return true;
+    }
 
-    static inline const clap_plugin_note_ports_t notePortsExt = {
-        [](const clap_plugin_t*, bool) { return 1u; },
-        [](const clap_plugin_t*, std::uint32_t index, bool isInput, clap_note_port_info_t* info) {
-            if (index != 0) return false;
-            *info = clap_note_port_info_t{};
-            info->id = 0;
-            info->supported_dialects = CLAP_NOTE_DIALECT_CLAP | CLAP_NOTE_DIALECT_MIDI;
-            info->preferred_dialect = CLAP_NOTE_DIALECT_CLAP;
-            std::snprintf(info->name, sizeof info->name, "%s", isInput ? "Notes in" : "Notes out");
-            return true;
-        },
-    };
+    static bool stateLoad(const clap_plugin_t* plugin, const clap_istream_t* stream)
+    {
+        unsigned char bytes[kStateMax];
+        std::size_t size = 0;
+        while (size < sizeof bytes) {
+            const std::int64_t n = stream->read(stream, bytes + size, sizeof bytes - size);
+            if (n < 0) return false;
+            if (n == 0) break;
+            size += static_cast<std::size_t>(n);
+        }
+        std::uint32_t count = 0;
+        if (size < 4) return false;
+        std::memcpy(&count, bytes, 4);
+        if (count > 64 || size < 4 + std::size_t{count} * 12) return false;
+        auto& values = self(plugin).values_;
+        for (std::uint32_t i = 0; i < count; ++i) {
+            std::uint32_t id = 0;
+            double v = 0.0;
+            std::memcpy(&id, bytes + 4 + i * 12, 4);
+            std::memcpy(&v, bytes + 8 + i * 12, 8);
+            if (id < N && std::isfinite(v)) {
+                values[id].store(std::clamp(v, E::params[id].min, E::params[id].max), std::memory_order_relaxed);
+            }
+        }
+        const clap_host_t* host = self(plugin).host_;
+        const auto* hostParams = host != nullptr && host->get_extension != nullptr
+            ? static_cast<const clap_host_params_t*>(host->get_extension(host, CLAP_EXT_PARAMS))
+            : nullptr;
+        if (hostParams != nullptr && hostParams->rescan != nullptr) {
+            hostParams->rescan(host, CLAP_PARAM_RESCAN_VALUES);
+        }
+        return true;
+    }
+
+    static inline const clap_plugin_state_t stateExt = {&stateSave, &stateLoad};
+
+    static std::uint32_t notePortsCount(const clap_plugin_t*, bool) { return 1; }
+
+    static bool notePortsInfo(const clap_plugin_t*, std::uint32_t index, bool isInput, clap_note_port_info_t* info)
+    {
+        if (index != 0) return false;
+        *info = clap_note_port_info_t{};
+        info->id = 0;
+        info->supported_dialects = CLAP_NOTE_DIALECT_CLAP | CLAP_NOTE_DIALECT_MIDI;
+        info->preferred_dialect = CLAP_NOTE_DIALECT_CLAP;
+        std::snprintf(info->name, sizeof info->name, "%s", isInput ? "Notes in" : "Notes out");
+        return true;
+    }
+
+    static inline const clap_plugin_note_ports_t notePortsExt = {&notePortsCount, &notePortsInfo};
 
     const clap_host_t* host_;
     clap_plugin_t plugin_{};
